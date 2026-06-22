@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 from streamlit.elements.widgets.chat import ChatInputValue
 from supabase import create_client
 
-st.set_page_config(page_title="AI Assistant", layout="centered")
+st.set_page_config(page_title="AI Assistant", layout="wide")
 
-APP_VERSION = "general-purpose-v1"
+APP_VERSION = "general-purpose-v2"
 
 load_dotenv()
 
@@ -23,19 +23,17 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-
-def _max_output_tokens(model: str) -> int:
-    """Anthropic requires max_tokens; use each model's maximum output cap."""
-    model_lower = model.lower()
-    if "opus" in model_lower:
-        return 8192
-    return 8192  # Sonnet, Haiku, and other current models
-
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 MAX_IMAGES_PER_MESSAGE = 5
 
 SYSTEM_PROMPT = ""
+
+
+def _max_output_tokens(model: str) -> int:
+    if "opus" in model.lower():
+        return 8192
+    return 8192
 
 
 def type_writer(text):
@@ -59,7 +57,6 @@ def _image_media_type(uploaded_file) -> str:
 
 
 def build_user_content(text: str, files) -> str | list:
-    """Build Anthropic message content from chat text and uploaded images."""
     blocks = []
     text = (text or "").strip()
 
@@ -82,20 +79,17 @@ def build_user_content(text: str, files) -> str | list:
         media_type = _image_media_type(uploaded_file)
         if media_type not in ALLOWED_IMAGE_TYPES:
             raise ValueError(
-                f"{uploaded_file.name}: unsupported type. "
-                "Use PNG, JPEG, GIF, or WebP."
+                f"{uploaded_file.name}: unsupported type. Use PNG, JPEG, GIF, or WebP."
             )
 
-        blocks.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": base64.standard_b64encode(data).decode("utf-8"),
-                },
-            }
-        )
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": base64.standard_b64encode(data).decode("utf-8"),
+            },
+        })
 
     if not blocks:
         raise ValueError("Enter a message or attach at least one image.")
@@ -112,15 +106,11 @@ def render_message_content(content: str | list) -> None:
     if isinstance(content, str):
         st.markdown(content)
         return
-
     for block in content:
         if block["type"] == "text":
             st.markdown(block["text"])
         elif block["type"] == "image":
-            st.image(
-                base64.b64decode(block["source"]["data"]),
-                use_container_width=True,
-            )
+            st.image(base64.b64decode(block["source"]["data"]), use_container_width=True)
 
 
 def _anthropic_messages():
@@ -131,40 +121,76 @@ def _anthropic_messages():
     ]
 
 
-def load_conversation_history():
+# --- Supabase helpers ---
+
+def fetch_conversations():
     if not supabase:
-        return
+        return []
     try:
-        data = supabase.table("conversations").select("*").order("created_at", desc=False).execute()
-        for row in data.data:
-            st.session_state.messages.append({
-                "role": row["message_role"],
-                "content": row["message_content"]
-            })
-    except Exception as e:
-        st.warning(f"Could not load conversation history: {str(e)}")
+        data = supabase.table("conversations").select("*").order("updated_at", desc=True).execute()
+        return data.data or []
+    except Exception:
+        return []
 
 
-def save_message_to_db(role: str, content: str):
+def create_conversation(title: str) -> str | None:
+    if not supabase:
+        return None
+    try:
+        data = supabase.table("conversations").insert({"title": title}).execute()
+        return data.data[0]["id"]
+    except Exception:
+        return None
+
+
+def load_messages(conversation_id: str) -> list:
+    if not supabase:
+        return []
+    try:
+        data = (
+            supabase.table("messages")
+            .select("*")
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return [{"role": row["message_role"], "content": row["message_content"]} for row in data.data]
+    except Exception:
+        return []
+
+
+def save_message(conversation_id: str, role: str, content: str | list):
     if not supabase:
         return
     try:
         if isinstance(content, list):
             content = str(content)
-        supabase.table("conversations").insert({
+        supabase.table("messages").insert({
+            "conversation_id": conversation_id,
             "message_role": role,
-            "message_content": content
+            "message_content": content,
         }).execute()
-    except Exception as e:
-        st.warning(f"Could not save message: {str(e)}")
+        supabase.table("conversations").update({"updated_at": "now()"}).eq("id", conversation_id).execute()
+    except Exception:
+        pass
 
+
+def get_title_from_message(text: str) -> str:
+    if isinstance(text, list):
+        for block in text:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block["text"]
+                break
+        else:
+            return "New Conversation"
+    return text[:50].strip() + ("…" if len(text) > 50 else "")
+
+
+# --- Claude ---
 
 def get_response():
     if not ANTHROPIC_API_KEY:
-        return (
-            "Error: ANTHROPIC_API_KEY is not set. "
-            "Add it to your .env file in the project folder."
-        )
+        return "Error: ANTHROPIC_API_KEY is not set."
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         kwargs = dict(
@@ -183,30 +209,52 @@ def get_response():
         return f"Error: {str(e)}"
 
 
+# --- Session state init ---
+
 if st.session_state.get("app_version") != APP_VERSION:
     st.session_state.clear()
     st.session_state.app_version = APP_VERSION
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "initialized" not in st.session_state:
-    st.session_state.initialized = False
-    load_conversation_history()
-    st.session_state.initialized = True
+if "active_conversation_id" not in st.session_state:
+    st.session_state.active_conversation_id = None
+if "conversations" not in st.session_state:
+    st.session_state.conversations = fetch_conversations()
 
-with st.container():
-    if not st.session_state.messages:
-        first_message = """Hello! I'm an AI assistant. How can I help you today?
 
-You can ask me anything, or attach an image and I'll analyze it for you.
-"""
-        st.session_state.messages.append({"role": "assistant", "content": first_message})
-        with st.chat_message("assistant"):
-            "".join(char for char in st.write_stream(type_writer(first_message)))
+# --- Sidebar ---
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            render_message_content(msg["content"])
+with st.sidebar:
+    st.title("Conversations")
+
+    if st.button("+ New Chat", use_container_width=True, type="primary"):
+        st.session_state.active_conversation_id = None
+        st.session_state.messages = []
+        st.rerun()
+
+    st.divider()
+
+    for convo in st.session_state.conversations:
+        label = convo.get("title") or "New Conversation"
+        is_active = convo["id"] == st.session_state.active_conversation_id
+        if st.button(label, key=convo["id"], use_container_width=True,
+                     type="secondary" if not is_active else "primary"):
+            if convo["id"] != st.session_state.active_conversation_id:
+                st.session_state.active_conversation_id = convo["id"]
+                st.session_state.messages = load_messages(convo["id"])
+                st.rerun()
+
+
+# --- Main chat area ---
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        render_message_content(msg["content"])
+
+if not st.session_state.messages and not st.session_state.active_conversation_id:
+    st.markdown("### Hello! How can I help you today?")
+    st.caption("Start typing below to begin a new conversation.")
 
 chat_submission = st.chat_input(
     "Message AI Assistant…",
@@ -227,8 +275,17 @@ if chat_submission is not None:
     except ValueError as err:
         st.error(str(err))
     else:
+        # Create a new conversation on first message
+        if not st.session_state.active_conversation_id:
+            title = get_title_from_message(user_content)
+            convo_id = create_conversation(title)
+            st.session_state.active_conversation_id = convo_id
+            st.session_state.conversations = fetch_conversations()
+
+        convo_id = st.session_state.active_conversation_id
+
         st.session_state.messages.append({"role": "user", "content": user_content})
-        save_message_to_db("user", user_content)
+        save_message(convo_id, "user", user_content)
 
         with st.chat_message("user"):
             render_message_content(user_content)
@@ -236,7 +293,5 @@ if chat_submission is not None:
         with st.chat_message("assistant"):
             response = get_response()
             "".join(char for char in st.write_stream(type_writer(response)))
-            st.session_state.messages.append(
-                {"role": "assistant", "content": response}
-            )
-            save_message_to_db("assistant", response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            save_message(convo_id, "assistant", response)
