@@ -8,6 +8,7 @@ import anthropic
 import streamlit as st
 from dotenv import load_dotenv
 from streamlit.elements.widgets.chat import ChatInputValue
+from supabase import create_client
 
 st.set_page_config(page_title="AI Assistant", layout="centered")
 
@@ -17,6 +18,10 @@ load_dotenv()
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 
 def _max_output_tokens(model: str) -> int:
@@ -126,6 +131,34 @@ def _anthropic_messages():
     ]
 
 
+def load_conversation_history():
+    if not supabase:
+        return
+    try:
+        data = supabase.table("conversations").select("*").order("created_at", desc=False).execute()
+        for row in data.data:
+            st.session_state.messages.append({
+                "role": row["message_role"],
+                "content": row["message_content"]
+            })
+    except Exception as e:
+        st.warning(f"Could not load conversation history: {str(e)}")
+
+
+def save_message_to_db(role: str, content: str):
+    if not supabase:
+        return
+    try:
+        if isinstance(content, list):
+            content = str(content)
+        supabase.table("conversations").insert({
+            "message_role": role,
+            "message_content": content
+        }).execute()
+    except Exception as e:
+        st.warning(f"Could not save message: {str(e)}")
+
+
 def get_response():
     if not ANTHROPIC_API_KEY:
         return (
@@ -158,9 +191,11 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
+    load_conversation_history()
+    st.session_state.initialized = True
 
 with st.container():
-    if not st.session_state.initialized:
+    if not st.session_state.messages:
         first_message = """Hello! I'm an AI assistant. How can I help you today?
 
 You can ask me anything, or attach an image and I'll analyze it for you.
@@ -168,11 +203,10 @@ You can ask me anything, or attach an image and I'll analyze it for you.
         st.session_state.messages.append({"role": "assistant", "content": first_message})
         with st.chat_message("assistant"):
             "".join(char for char in st.write_stream(type_writer(first_message)))
-        st.session_state.initialized = True
-    else:
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                render_message_content(msg["content"])
+
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            render_message_content(msg["content"])
 
 chat_submission = st.chat_input(
     "Message AI Assistant…",
@@ -194,6 +228,7 @@ if chat_submission is not None:
         st.error(str(err))
     else:
         st.session_state.messages.append({"role": "user", "content": user_content})
+        save_message_to_db("user", user_content)
 
         with st.chat_message("user"):
             render_message_content(user_content)
@@ -204,3 +239,4 @@ if chat_submission is not None:
             st.session_state.messages.append(
                 {"role": "assistant", "content": response}
             )
+            save_message_to_db("assistant", response)
