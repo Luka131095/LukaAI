@@ -20,8 +20,27 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+APP_PASSWORD = os.getenv("APP_PASSWORD")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+# --- Auth gate ---
+
+if not st.session_state.get("authenticated"):
+    st.markdown("<br>" * 4, unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        st.markdown("## 🔒 AI Assistant")
+        st.markdown("Enter the password to continue.")
+        pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                            placeholder="Password")
+        if st.button("Enter", use_container_width=True, type="primary"):
+            if APP_PASSWORD and pwd == APP_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    st.stop()
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
