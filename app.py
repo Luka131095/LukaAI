@@ -174,6 +174,24 @@ def save_message(conversation_id: str, role: str, content: str | list):
         pass
 
 
+def delete_conversation(conversation_id: str):
+    if not supabase:
+        return
+    try:
+        supabase.table("conversations").delete().eq("id", conversation_id).execute()
+    except Exception:
+        pass
+
+
+def rename_conversation(conversation_id: str, new_title: str):
+    if not supabase:
+        return
+    try:
+        supabase.table("conversations").update({"title": new_title}).eq("id", conversation_id).execute()
+    except Exception:
+        pass
+
+
 def get_title_from_message(text: str) -> str:
     if isinstance(text, list):
         for block in text:
@@ -220,6 +238,8 @@ if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = None
 if "conversations" not in st.session_state:
     st.session_state.conversations = fetch_conversations()
+if "editing_conversation_id" not in st.session_state:
+    st.session_state.editing_conversation_id = None
 
 
 # --- Sidebar ---
@@ -230,19 +250,56 @@ with st.sidebar:
     if st.button("+ New Chat", use_container_width=True, type="primary"):
         st.session_state.active_conversation_id = None
         st.session_state.messages = []
+        st.session_state.editing_conversation_id = None
         st.rerun()
 
     st.divider()
 
     for convo in st.session_state.conversations:
+        cid = convo["id"]
         label = convo.get("title") or "New Conversation"
-        is_active = convo["id"] == st.session_state.active_conversation_id
-        if st.button(label, key=convo["id"], use_container_width=True,
-                     type="secondary" if not is_active else "primary"):
-            if convo["id"] != st.session_state.active_conversation_id:
-                st.session_state.active_conversation_id = convo["id"]
-                st.session_state.messages = load_messages(convo["id"])
-                st.rerun()
+        is_active = cid == st.session_state.active_conversation_id
+        is_editing = cid == st.session_state.editing_conversation_id
+
+        if is_editing:
+            new_title = st.text_input(
+                "Rename", value=label, key=f"rename_input_{cid}", label_visibility="collapsed"
+            )
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("Save", key=f"save_{cid}", use_container_width=True):
+                    rename_conversation(cid, new_title.strip() or label)
+                    st.session_state.editing_conversation_id = None
+                    st.session_state.conversations = fetch_conversations()
+                    st.rerun()
+            with col_cancel:
+                if st.button("Cancel", key=f"cancel_{cid}", use_container_width=True):
+                    st.session_state.editing_conversation_id = None
+                    st.rerun()
+        else:
+            col_title, col_edit, col_del = st.columns([7, 1, 1])
+            with col_title:
+                if st.button(
+                    label, key=f"conv_{cid}", use_container_width=True,
+                    type="primary" if is_active else "secondary"
+                ):
+                    if not is_active:
+                        st.session_state.active_conversation_id = cid
+                        st.session_state.messages = load_messages(cid)
+                        st.session_state.editing_conversation_id = None
+                        st.rerun()
+            with col_edit:
+                if st.button("✏️", key=f"edit_{cid}"):
+                    st.session_state.editing_conversation_id = cid
+                    st.rerun()
+            with col_del:
+                if st.button("🗑️", key=f"del_{cid}"):
+                    delete_conversation(cid)
+                    if is_active:
+                        st.session_state.active_conversation_id = None
+                        st.session_state.messages = []
+                    st.session_state.conversations = fetch_conversations()
+                    st.rerun()
 
 
 # --- Main chat area ---
