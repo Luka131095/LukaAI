@@ -127,7 +127,7 @@ def fetch_conversations():
     if not supabase:
         return []
     try:
-        data = supabase.table("conversations").select("*").order("updated_at", desc=True).execute()
+        data = supabase.table("conversations").select("*").order("created_at", desc=True).execute()
         return data.data or []
     except Exception:
         return []
@@ -137,7 +137,7 @@ def create_conversation(title: str) -> str | None:
     if not supabase:
         return None
     try:
-        data = supabase.table("conversations").insert({"title": title}).execute()
+        data = supabase.table("conversations").insert({"title": title}).select().execute()
         return data.data[0]["id"]
     except Exception:
         return None
@@ -160,7 +160,7 @@ def load_messages(conversation_id: str) -> list:
 
 
 def save_message(conversation_id: str, role: str, content: str | list):
-    if not supabase:
+    if not supabase or not conversation_id:
         return
     try:
         if isinstance(content, list):
@@ -170,7 +170,6 @@ def save_message(conversation_id: str, role: str, content: str | list):
             "message_role": role,
             "message_content": content,
         }).execute()
-        supabase.table("conversations").update({"updated_at": "now()"}).eq("id", conversation_id).execute()
     except Exception:
         pass
 
