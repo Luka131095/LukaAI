@@ -248,9 +248,13 @@ def get_response():
 # --- Session state init ---
 
 if st.session_state.get("app_version") != APP_VERSION:
+    authenticated = st.session_state.get("authenticated", False)
     st.session_state.clear()
     st.session_state.app_version = APP_VERSION
+    st.session_state.authenticated = authenticated
 
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "active_conversation_id" not in st.session_state:
